@@ -332,23 +332,56 @@ class ARCComputingElement(ComputingElement):
       result['RunningJobs'] = ceStats.RunningJobs
       result['WaitingJobs'] = ceStats.WaitingJobs
     else:
-      # The system which works properly at present for ARC CEs that are configured correctly.
-      # But for this we need the VO to be known - ask me (Raja) for the whole story if interested.
-      cmd = 'ldapsearch -x -LLL -H ldap://%s:2135 -b mds-vo-name=resource,o=grid "(GlueVOViewLocalID=%s)"' % (
-          self.ceHost, vo.lower())
-      res = shellCall(0, cmd)
-      if not res['OK']:
-        gLogger.debug("Could not query CE %s - is it down?" % self.ceHost)
-        return res
-      try:
-        ldapValues = res['Value'][1].split("\n")
-        running = [lValue for lValue in ldapValues if 'GlueCEStateRunningJobs' in lValue]
-        waiting = [lValue for lValue in ldapValues if 'GlueCEStateWaitingJobs' in lValue]
-        result['RunningJobs'] = int(running[0].split(":")[1])
-        result['WaitingJobs'] = int(waiting[0].split(":")[1])
-      except IndexError:
+
+      subject = ''
+      res = getProxyInfo()
+      if rs['OK']:
+        vo = res['Value']
+
+      def returnJobsBasedOnState(state):
+        """ Return the total number ofjobs based on 'state'
+        """
+
+        cmd_start = 'ldapsearch -x -LLL -H ldap://%s:2135 -b mds-vo-name=resource,o=grid ' % self.ceHost
+        if state == 'running':
+          filter = "(&(nordugrid-job-status=INLRMS:R)(nordugrid-job-globalowner==%s)"' % subject
+        elif state == 'queued':
+          filter = "(&(nordugrid-job-status=INLRMS:Q)(nordugrid-job-globalowner==%s)"" % subject
+
+        res = shellCall(0, cmd)
+
+        if not res['OK']:
+          gLogger.debug("Could not query CE %s - is it down?" % self.ceHost)
+          return -1
+
+        try:
+          ldapOutput = res['Value'][1].split("\n")
+        except IndexError:
+          gLogger.debug("Could not parse ldap query for CE %s - is it misconfigured?" % self.ceHost)
+          return -1000
+
+        matching_job = -10
+
+        for line in reversed(ldapOutput):
+          if line.startswith('# numEntries:'):
+            try:
+              matching_jobs =  int(line.split(':')[1])
+            except:
+              gLogger.debug("Could not parse ldap result for CE %s - is it misconfigured?" % self.ceHost)
+              matching_jobs = -999
+            break
+
+        return matching_jobs
+
+      runningJobNum = returnJobsBasedOnState('running')
+      queuedJobNum = returnJobsBasedOnState('queued')
+
+      if (runningJobNum<0) or (queuedJobNum<0):
         res = S_ERROR('Unknown ldap failure for site %s' % self.ceHost)
         return res
+
+      result['RunningJobs'] = runningJobNum
+      result['WaitingJobs'] = queuedJobNum
 
     return result
 
